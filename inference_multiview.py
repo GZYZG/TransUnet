@@ -1,3 +1,5 @@
+# 使用多个视图进行inference
+
 import torch
 import argparse
 from scipy.ndimage import zoom
@@ -39,19 +41,13 @@ args = parser.parse_args()
 
 
 if __name__ == "__main__":
+    model_path = {
+        'X': '',
+        'Y': '',
+        'Z': ''
+    }
     args.is_pretrain = True
     args.exp = 'TU_' + args.dataset + str(args.img_size)
-    snapshot_path = "./model/{}/{}".format(args.exp, 'TU')
-    snapshot_path = snapshot_path + '_pretrain' if args.is_pretrain else snapshot_path
-    snapshot_path += '_' + args.vit_name
-    snapshot_path = snapshot_path + '_skip' + str(args.n_skip)
-    snapshot_path = snapshot_path + '_vitpatch' + str(
-        args.vit_patches_size) if args.vit_patches_size != 16 else snapshot_path
-    snapshot_path = snapshot_path + '_epo' + str(args.max_epochs) if args.max_epochs != 30 else snapshot_path
-    snapshot_path = snapshot_path + '_bs' + str(args.batch_size)
-    snapshot_path = snapshot_path + '_lr' + str(args.base_lr) if args.base_lr != 0.01 else snapshot_path
-    snapshot_path = snapshot_path + '_' + str(args.img_size)
-    snapshot_path = snapshot_path + '_s' + str(args.seed) if args.seed != 1234 else snapshot_path
 
     config_vit = CONFIGS_ViT_seg[args.vit_name]
     config_vit.n_classes = args.num_classes
@@ -60,16 +56,15 @@ if __name__ == "__main__":
     if args.vit_name.find('R50') != -1:
         config_vit.patches.grid = (
         int(args.img_size / args.vit_patches_size), int(args.img_size / args.vit_patches_size))
-    net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
 
-    snapshot = os.path.join(snapshot_path, 'best_model.pth')
-    if not os.path.exists(snapshot):
-        snapshot = snapshot.replace('best_model', 'epoch_' + str(args.max_epochs - 1))
-    net.load_state_dict(torch.load(snapshot))
-    print(f"Load model from {snapshot}")
-    snapshot_name = snapshot_path.split('/')[-1]
+    models = {}
+    for view, path in model_path:
+        net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
+        net.load_state_dict(torch.load(path))
+        print(f"Load model from {path}")
+        models[view] = net
 
-    test_save_path = os.path.join(args.test_save_dir, args.exp, snapshot_name)
+    test_save_path = ''
     if not os.path.exists(test_save_path):
         os.makedirs(test_save_path)
 
@@ -91,24 +86,47 @@ if __name__ == "__main__":
 
         image = torch.from_numpy(image)
         image = image.squeeze(0).cpu().detach().numpy()
-        prediction = np.zeros_like(image)
 
-        for ind in range(image.shape[0]):
-            slice = image[ind, :, :]
-            x, y = slice.shape[0], slice.shape[1]
-            if x != patch_size[0] or y != patch_size[1]:
-                slice = zoom(slice, (patch_size[0] / x, patch_size[1] / y), order=3)  # previous using 0
-            input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().cuda()
-            net.eval()
-            with torch.no_grad():
-                outputs = net(input)
-                out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
-                out = out.cpu().detach().numpy()
-                if x != patch_size[0] or y != patch_size[1]:
-                    pred = zoom(out, (x / patch_size[0], y / patch_size[1]), order=0)
+        predictions = {}
+        shape = image.shape  # (z, x, y)
+        shape = zip(['X', 'Y', 'Z'], shape)
+        for idx, (view, dim) in enumerate(shape):
+            predictions[view] = np.zeros_like(image)
+            for ind in range(dim):
+                if view == 'Z':
+                    slice = image[ind, :, :]
+                elif view == 'X':
+                    slice = image[:, ind, :]
                 else:
-                    pred = out
-                prediction[ind] = pred
+                    slice = image[:, :, ind]
+
+                x, y = slice.shape[0], slice.shape[1]
+                if x != patch_size[0] or y != patch_size[1]:
+                    slice = zoom(slice, (patch_size[0] / x, patch_size[1] / y), order=3)  # previous using 0
+                input = torch.from_numpy(slice).unsqueeze(0).unsqueeze(0).float().cuda()
+
+                models[view].eval()
+                net = models[view]
+
+                with torch.no_grad():
+                    outputs = net(input)
+                    out = torch.argmax(torch.softmax(outputs, dim=1), dim=1).squeeze(0)
+                    out = out.cpu().detach().numpy()
+                    if x != patch_size[0] or y != patch_size[1]:
+                        pred = zoom(out, (x / patch_size[0], y / patch_size[1]), order=0)
+                    else:
+                        pred = out
+
+                    if view == 'Z':
+                        predictions[view][ind, :, :] = pred
+                    elif view == 'X':
+                        predictions[view][:, ind, :] = pred
+                    else:
+                        predictions[view][:, :, ind] = pred
+
+        # 根据三个视图的结果进行组装
+        prediction = None
+
         if args.is_chunked:
             prediction = np.concatenate([np.zeros((start_index, *patch_size)), prediction], axis=0)
         prd_itk = sitk.GetImageFromArray(prediction.astype(np.float32))

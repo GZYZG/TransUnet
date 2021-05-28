@@ -1,3 +1,4 @@
+# 选择一部分器官进行分割
 import argparse
 import logging
 import os
@@ -7,15 +8,15 @@ import torch
 import torch.backends.cudnn as cudnn
 from networks.vit_seg_modeling import VisionTransformer as ViT_seg
 from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
-from trainer import trainer_synapse, trainer_flare21
+from trainer import trainer_synapse, trainer_flare21, trainer_masked_synapse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root_path', type=str,
                     default='./data/Synapse/train_npz', help='root dir for data')
 parser.add_argument('--dataset', type=str,
-                    default='Synapse_X', help='experiment_name')
+                    default='Masked_Synapse', help='experiment_name')
 parser.add_argument('--list_dir', type=str,
-                    default='./lists/lists_Synapse_X', help='list dir')
+                    default='./lists/lists_Synapse', help='list dir')
 parser.add_argument('--num_classes', type=int,
                     default=9, help='output channel of network')
 parser.add_argument('--max_iterations', type=int,
@@ -39,7 +40,6 @@ parser.add_argument('--vit_name', type=str,
                     default='R50-ViT-B_16', help='select one vit model')
 parser.add_argument('--vit_patches_size', type=int,
                     default=16, help='vit_patches_size, default is 16')
-parser.add_argument('--start_epoch', type=int, default=0)
 args = parser.parse_args()
 
 
@@ -56,24 +56,12 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
     dataset_name = args.dataset
+    visible_class = [1,2, 3, 4, 5]
     dataset_config = {
-        'Synapse': {
+        'Masked_Synapse': {
             'root_path': './data/Synapse/train_npz',
             'list_dir': './lists/lists_Synapse',
-            'num_classes': 14,
-        },
-        'Synapse_X': {
-            'root_path': './data/Synapse_X/train_npz',
-            'list_dir': './lists/lists_Synapse_X',
-            'num_classes': 14,
-            'restore': True,
-            'restore_model': 'epoch_34.pth',
-            'start_epoch': 35
-        },
-        'Synapse_Y': {
-            'root_path': './data/Synapse_Y/train_npz',
-            'list_dir': './lists/lists_Synapse_Y',
-            'num_classes': 14,
+            'num_classes': len(visible_class)+1,
         },
         'FLARE21': {
             'root_path': './data/FLARE21/train_npz',
@@ -108,11 +96,5 @@ if __name__ == "__main__":
     net = ViT_seg(config_vit, img_size=args.img_size, num_classes=config_vit.n_classes).cuda()
     net.load_from(weights=np.load(config_vit.pretrained_path))
 
-    if dataset_config[dataset_name].get('restore', False):
-        state = torch.load(os.path.join(snapshot_path, dataset_config[dataset_name]['restore_model']))
-        net.load_state_dict(state)
-        args.start_epoch = dataset_config[dataset_name]['start_epoch']
-
-    trainer = {'Synapse': trainer_synapse, "FLARE21": trainer_flare21,
-               'Synapse_X': trainer_synapse, 'Synapse_Y': trainer_synapse}
+    trainer = {'Synapse': trainer_synapse, "FLARE21": trainer_flare21, "Masked_Synapse": trainer_masked_synapse}
     trainer[dataset_name](args, net, snapshot_path)

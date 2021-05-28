@@ -8,7 +8,9 @@ from scipy import ndimage
 from scipy.ndimage.interpolation import zoom
 from torch.utils.data import Dataset
 import SimpleITK as sitk
-
+"""
+liver ( label=1 ), kidney ( label=2 ), spleen ( label=3 ), and pancreas ( label=4 )
+"""
 
 def nii2slices(nii_path):
     image = sitk.ReadImage(nii_path)
